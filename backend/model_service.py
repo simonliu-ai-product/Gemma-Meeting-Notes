@@ -18,7 +18,7 @@ import logging
 import torch
 import torchaudio
 from flask import Flask, jsonify, request
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoProcessor, Gemma4ForConditionalGeneration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ app = Flask(__name__)
 logger.info(f"Loading model {MODEL_ID} on {DEVICE} ...")
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = AutoModelForCausalLM.from_pretrained(
+model = Gemma4ForConditionalGeneration.from_pretrained(
     MODEL_ID,
     device_map="auto",
     torch_dtype=DTYPE,
