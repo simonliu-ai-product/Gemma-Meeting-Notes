@@ -91,7 +91,13 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
         add_generation_prompt=True,
         enable_thinking=False,
     )
-    inputs = processor(text=text, return_tensors="pt").to(model.device)
+    # 音訊需與 text 一起傳給 processor，否則模型只看到文字 prompt
+    inputs = processor(
+        text=text,
+        audio=waveform,
+        sampling_rate=sr,
+        return_tensors="pt",
+    ).to(model.device)
     input_len = inputs["input_ids"].shape[-1]
 
     with torch.inference_mode():
