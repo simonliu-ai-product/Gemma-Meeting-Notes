@@ -1,27 +1,31 @@
 """
 Backend API — runs on port 8000
-Handles file uploads, audio chunking, calls model_service, streams results.
 
 POST /api/transcribe
-  Form: file=<audio file>, language=zh|en
-  Returns: text/event-stream SSE
-    data: {"type":"start",  "total": <n>}
-    data: {"type":"chunk",  "index": <i>, "total": <n>, "text": "<partial>"}
-    data: {"type":"result", "text": "<full>", "srt": "<srt>", "chunks_count": <n>}
-    data: {"type":"error",  "detail": "<msg>"}
+  Form: file=<audio>, language=zh|en
+  Returns: { "task_id": str }
+
+GET /api/progress/{task_id}
+  Returns: { "status": "processing"|"done"|"error",
+             "chunk": int, "total": int, "detail": str }
+
+GET /api/result/{task_id}
+  Returns: { "text": str, "srt": str, "chunks_count": int }  (when done)
+           404 if still processing, 500 if error
 
 GET /api/health
 """
 
-import json
+import asyncio
 import os
 import logging
+import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from transcriber import build_output, load_audio, split_audio
 
@@ -41,6 +45,44 @@ app.add_middleware(
 )
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+
+# In-memory task store: task_id → state dict
+tasks: dict[str, dict] = {}
+
+
+# ---------------------------------------------------------------------------
+# Background transcription task
+# ---------------------------------------------------------------------------
+async def run_transcription(task_id: str, file_bytes: bytes, suffix: str, language: str):
+    state = tasks[task_id]
+    try:
+        audio  = load_audio(file_bytes, suffix)
+        chunks = split_audio(audio)
+        state["total"] = len(chunks)
+        logger.info(f"[{task_id}] {len(chunks)} chunk(s)")
+
+        texts: list[str] = []
+        timeout = httpx.Timeout(connect=30, read=None, write=60, pool=30)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for i, chunk in enumerate(chunks):
+                state["chunk"] = i + 1
+                logger.info(f"[{task_id}] chunk {i+1}/{len(chunks)}")
+                r = await client.post(
+                    f"{MODEL_SERVICE_URL}/transcribe",
+                    json={"audio_b64": chunk["b64"], "language": language},
+                )
+                r.raise_for_status()
+                texts.append(r.json().get("text", ""))
+
+        output = build_output(chunks, texts)
+        state["result"] = {**output, "chunks_count": len(chunks)}
+        state["status"] = "done"
+        logger.info(f"[{task_id}] done")
+
+    except Exception as e:
+        logger.exception(f"[{task_id}] failed")
+        state["status"] = "error"
+        state["detail"] = str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -67,56 +109,42 @@ async def health():
 
 @app.post("/api/transcribe")
 async def transcribe(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     language: str = Form("zh"),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(SUPPORTED_EXTENSIONS)}",
-        )
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{suffix}'.")
 
     file_bytes = await file.read()
-    logger.info(f"Received: {file.filename} ({len(file_bytes)/1024:.1f} KB), lang={language}")
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {"status": "processing", "chunk": 0, "total": 1, "detail": ""}
+    background_tasks.add_task(run_transcription, task_id, file_bytes, suffix, language)
+    logger.info(f"[{task_id}] started — {file.filename} ({len(file_bytes)//1024} KB)")
+    return {"task_id": task_id}
 
-    try:
-        audio = load_audio(file_bytes, suffix)
-        chunks = split_audio(audio)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Audio processing error: {e}")
 
-    logger.info(f"Split into {len(chunks)} chunk(s)")
+@app.get("/api/progress/{task_id}")
+async def progress(task_id: str):
+    state = tasks.get(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {
+        "status": state["status"],
+        "chunk":  state["chunk"],
+        "total":  state["total"],
+        "detail": state.get("detail", ""),
+    }
 
-    async def event_stream():
-        def sse(data: dict) -> str:
-            return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        yield sse({"type": "start", "total": len(chunks)})
-
-        texts: list[str] = []
-        # read=None：模型推論無固定上限，避免長音訊推論超時
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=None, write=60, pool=30)) as client:
-            for i, chunk in enumerate(chunks):
-                logger.info(f"Transcribing chunk {i+1}/{len(chunks)} ...")
-                try:
-                    r = await client.post(
-                        f"{MODEL_SERVICE_URL}/transcribe",
-                        json={"audio_b64": chunk["b64"], "language": language},
-                    )
-                    r.raise_for_status()
-                    text = r.json().get("text", "")
-                except httpx.HTTPStatusError as e:
-                    yield sse({"type": "error", "detail": f"Model service error on chunk {i+1}: {e.response.text}"})
-                    return
-                except Exception as e:
-                    yield sse({"type": "error", "detail": f"Model service unreachable: {e}"})
-                    return
-
-                texts.append(text)
-                yield sse({"type": "chunk", "index": i + 1, "total": len(chunks), "text": text})
-
-        output = build_output(chunks, texts)
-        yield sse({"type": "result", "text": output["text"], "srt": output["srt"], "chunks_count": len(chunks)})
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+@app.get("/api/result/{task_id}")
+async def result(task_id: str):
+    state = tasks.get(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if state["status"] == "processing":
+        raise HTTPException(status_code=202, detail="Still processing")
+    if state["status"] == "error":
+        raise HTTPException(status_code=500, detail=state.get("detail", "Unknown error"))
+    return JSONResponse(content=state["result"])
