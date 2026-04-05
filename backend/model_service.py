@@ -1,6 +1,6 @@
 """
 Model Service — runs on port 8001
-Loads Gemma 4 E4B (or E2B) locally and exposes a /transcribe endpoint.
+Loads Gemma 4 E2B/E4B locally and exposes a /transcribe endpoint.
 
 POST /transcribe
   Body: { "audio_b64": "<base64 WAV>", "language": "zh" | "en" }
@@ -14,11 +14,11 @@ import base64
 import io
 import os
 import logging
+import tempfile
 
 import torch
-import torchaudio
 from flask import Flask, jsonify, request
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoModelForMultimodalLM
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,11 +26,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# Gemma 4 E4B (multimodal: text + image + audio).
-# Change to "google/gemma-4-E2B-it" for the smaller 2B variant.
-MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-E4B-it")
+MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-E2B-it")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 app = Flask(__name__)
 
@@ -40,9 +37,9 @@ app = Flask(__name__)
 logger.info(f"Loading model {MODEL_ID} on {DEVICE} ...")
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForMultimodalLM.from_pretrained(
     MODEL_ID,
-    dtype=DTYPE,
+    dtype="auto",
     device_map="auto",
 )
 model.eval()
@@ -53,66 +50,57 @@ logger.info("Model loaded successfully.")
 # Helpers
 # ---------------------------------------------------------------------------
 PROMPTS = {
-    "zh": "請將以下語音片段轉錄為繁體中文文字，只輸出轉錄結果，不要加任何說明：",
-    "en": "Please transcribe the following speech segment into English text. Output only the transcription, no explanations:",
+    "zh": "請將以下語音片段轉錄為繁體中文文字。只輸出轉錄結果，不要加任何說明，數字請直接寫數字。",
+    "en": "Transcribe the following speech segment in its original language. Only output the transcription, with no newlines. When transcribing numbers, write the digits.",
 }
-
-
-def decode_audio(b64_str: str) -> tuple:
-    """Decode base64 WAV → (waveform numpy array [T], sample_rate)."""
-    wav_bytes = base64.b64decode(b64_str)
-    buf = io.BytesIO(wav_bytes)
-    waveform, sr = torchaudio.load(buf)
-    # Ensure mono, then squeeze to 1D numpy array (samples,)
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0)
-    else:
-        waveform = waveform.squeeze(0)
-    return waveform.numpy(), sr
 
 
 def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
     prompt_text = PROMPTS.get(language, PROMPTS["zh"])
 
-    waveform, sr = decode_audio(audio_b64)
+    # 存成暫存 WAV 檔（processor 需要檔案路徑）
+    wav_bytes = base64.b64decode(audio_b64)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(wav_bytes)
+        tmp_path = tmp.name
 
-    # Build conversation with audio input
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "audio", "audio": waveform, "sampling_rate": sr},
-                {"type": "text", "text": prompt_text},
-            ],
-        }
-    ]
+    try:
+        # 音訊放在文字前面（官方建議順序）
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": tmp_path},
+                    {"type": "text", "text": prompt_text},
+                ],
+            }
+        ]
 
-    text = processor.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-    )
-    # 音訊需與 text 一起傳給 processor，否則模型只看到文字 prompt
-    inputs = processor(
-        text=text,
-        audio=waveform,
-        sampling_rate=sr,
-        return_tensors="pt",
-    ).to(model.device)
-    input_len = inputs["input_ids"].shape[-1]
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            add_generation_prompt=True,
+        ).to(model.device)
 
-    with torch.inference_mode():
-        output_ids = model.generate(**inputs, max_new_tokens=512)
+        input_len = inputs["input_ids"].shape[-1]
 
-    response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
-    result = processor.parse_response(response)
-    # parse_response 回傳 dict（含 thinking / text 欄位）或純字串
-    if isinstance(result, dict):
-        text = result.get("text") or result.get("content") or str(result)
-    else:
-        text = result
-    return text.strip()
+        with torch.inference_mode():
+            output_ids = model.generate(**inputs, max_new_tokens=512)
+
+        response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
+        result = processor.parse_response(response)
+
+        if isinstance(result, dict):
+            text = result.get("text") or result.get("content") or str(result)
+        else:
+            text = result
+
+        return text.strip()
+
+    finally:
+        os.unlink(tmp_path)
 
 
 # ---------------------------------------------------------------------------
