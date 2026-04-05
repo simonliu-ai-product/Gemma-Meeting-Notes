@@ -118,5 +118,5 @@ MODEL_SERVICE_URL=http://localhost:8001 \
 
 ## 授權
 
-Apache 2.0，詳見 [LICENSE](LICENSE)。  
-Gemma 模型權重須遵守 [Google Gemma 使用條款](https://ai.google.dev/gemma/terms)。
+- **專案程式碼** — Apache 2.0，詳見 [LICENSE](LICENSE)
+- **Gemma 4 模型權重** — Apache 2.0（[Gemma 4 release note](https://ai.google.dev/gemma)）

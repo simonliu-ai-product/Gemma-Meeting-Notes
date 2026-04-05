@@ -118,5 +118,5 @@ Long recordings are automatically split into ≤ 25 s chunks and merged after tr
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).  
-Gemma model weights are subject to [Google's Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+- **Project code** — Apache 2.0, see [LICENSE](LICENSE)
+- **Gemma 4 model weights** — Apache 2.0 ([Gemma 4 release note](https://ai.google.dev/gemma))
