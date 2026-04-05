@@ -18,7 +18,7 @@ import logging
 import torch
 import torchaudio
 from flask import Flask, jsonify, request
-from transformers import AutoProcessor, Gemma4ForConditionalGeneration
+from transformers import AutoProcessor, AutoModelForCausalLM
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 # Gemma 4 E4B (multimodal: text + image + audio).
-# Change to "google/gemma-4-e2b-it" for the smaller 2B variant.
-MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-e4b-it")
+# Change to "google/gemma-4-E2B-it" for the smaller 2B variant.
+MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-E4B-it")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
@@ -40,10 +40,10 @@ app = Flask(__name__)
 logger.info(f"Loading model {MODEL_ID} on {DEVICE} ...")
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = Gemma4ForConditionalGeneration.from_pretrained(
+model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
+    dtype=DTYPE,
     device_map="auto",
-    torch_dtype=DTYPE,
 )
 model.eval()
 logger.info("Model loaded successfully.")
@@ -74,7 +74,7 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
 
     waveform, sr = decode_audio(audio_b64)
 
-    # Build conversation with audio
+    # Build conversation with audio input
     messages = [
         {
             "role": "user",
@@ -85,26 +85,21 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
         }
     ]
 
-    inputs = processor.apply_chat_template(
+    text = processor.apply_chat_template(
         messages,
+        tokenize=False,
         add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-    ).to(model.device, dtype=DTYPE)
+        enable_thinking=False,
+    )
+    inputs = processor(text=text, return_tensors="pt").to(model.device)
+    input_len = inputs["input_ids"].shape[-1]
 
     with torch.inference_mode():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=512,
-            do_sample=False,
-        )
+        output_ids = model.generate(**inputs, max_new_tokens=512)
 
-    # Decode only the newly generated tokens
-    input_len = inputs["input_ids"].shape[1]
-    generated = output_ids[0][input_len:]
-    text = processor.decode(generated, skip_special_tokens=True).strip()
-    return text
+    response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
+    result = processor.parse_response(response)
+    return result.strip()
 
 
 # ---------------------------------------------------------------------------
