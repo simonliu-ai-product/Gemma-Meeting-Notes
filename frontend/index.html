@@ -461,8 +461,11 @@ async function submitFile() {
           if (p.status === "processing") {
             const pct = p.total > 0 ? Math.max(5, Math.round((p.chunk / p.total) * 95)) : 5;
             const t = I18N[currentLang];
-            const label  = p.chunk > 0 ? t.chunkStatus(p.chunk, p.total) : t.progressInit;
-            const detail = p.chunk > 0 ? `片段 ${p.chunk}／${p.total} 完成` : "";
+            const label  = p.processing > 0 ? t.chunkStatus(p.processing, p.total) : t.progressInit;
+            const done   = currentLang === "zh"
+              ? `已完成 ${p.chunk}／${p.total} 段`
+              : `${p.chunk} of ${p.total} chunks done`;
+            const detail = p.total > 0 ? done : "";
             showProgress(pct, label, detail);
 
           } else if (p.status === "done") {

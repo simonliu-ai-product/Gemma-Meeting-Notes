@@ -65,7 +65,8 @@ async def run_transcription(task_id: str, file_bytes: bytes, suffix: str, langua
         timeout = httpx.Timeout(connect=30, read=None, write=60, pool=30)
         async with httpx.AsyncClient(timeout=timeout) as client:
             for i, chunk in enumerate(chunks):
-                state["chunk"] = i + 1
+                state["chunk"] = i      # i = 已完成數，推論前先更新
+                state["processing"] = i + 1
                 logger.info(f"[{task_id}] chunk {i+1}/{len(chunks)}")
                 r = await client.post(
                     f"{MODEL_SERVICE_URL}/transcribe",
@@ -73,6 +74,7 @@ async def run_transcription(task_id: str, file_bytes: bytes, suffix: str, langua
                 )
                 r.raise_for_status()
                 texts.append(r.json().get("text", ""))
+                state["chunk"] = i + 1  # 完成後更新已完成數
 
         output = build_output(chunks, texts)
         state["result"] = {**output, "chunks_count": len(chunks)}
@@ -131,10 +133,11 @@ async def progress(task_id: str):
     if not state:
         raise HTTPException(status_code=404, detail="Task not found")
     return {
-        "status": state["status"],
-        "chunk":  state["chunk"],
-        "total":  state["total"],
-        "detail": state.get("detail", ""),
+        "status":     state["status"],
+        "chunk":      state["chunk"],       # 已完成片段數
+        "processing": state.get("processing", 0),  # 正在處理的片段號
+        "total":      state["total"],
+        "detail":     state.get("detail", ""),
     }
 
 
