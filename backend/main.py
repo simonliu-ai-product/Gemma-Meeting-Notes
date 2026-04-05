@@ -17,8 +17,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 from transcriber import build_output, load_audio, split_audio
 
@@ -40,15 +39,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve the frontend from /  (index.html lives in ../frontend/)
+# Frontend index.html lives in ../frontend/
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
-if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+@app.get("/")
+async def serve_frontend():
+    index = FRONTEND_DIR / "index.html"
+    if not index.exists():
+        return JSONResponse({"error": "frontend not found"}, status_code=404)
+    return FileResponse(str(index))
+
+
 @app.get("/api/health")
 async def health():
     async with httpx.AsyncClient(timeout=5) as client:
