@@ -95,7 +95,8 @@ async def transcribe(
         yield sse({"type": "start", "total": len(chunks)})
 
         texts: list[str] = []
-        async with httpx.AsyncClient(timeout=300) as client:
+        # read=None：模型推論無固定上限，避免長音訊推論超時
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=None, write=60, pool=30)) as client:
             for i, chunk in enumerate(chunks):
                 logger.info(f"Transcribing chunk {i+1}/{len(chunks)} ...")
                 try:
