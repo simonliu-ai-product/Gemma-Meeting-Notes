@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemma 4 · 會議轉錄 / Meeting Transcription</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+                   "Helvetica Neue", Arial, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 16px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 720px;
+    }
+    .card + .card { margin-top: 1.5rem; }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      width: 100%;
+      max-width: 720px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+    .logo { display: flex; align-items: center; gap: 0.75rem; }
+    .logo svg { width: 36px; height: 36px; }
+    .logo-text h1 { font-size: 1.25rem; font-weight: 700; line-height: 1.2; }
+    .logo-text p { font-size: 0.8rem; color: #64748b; }
+
+    /* ── Language toggle ──────────────────────────────────────────────────── */
+    .lang-toggle {
+      display: flex;
+      background: #252836;
+      border-radius: 8px;
+      padding: 3px;
+      gap: 2px;
+    }
+    .lang-toggle button {
+      background: none;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      padding: 0.3rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .lang-toggle button.active {
+      background: #4f63ff;
+      color: #fff;
+    }
+
+    /* ── Section titles ───────────────────────────────────────────────────── */
+    .section-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 1rem;
+    }
+
+    /* ── Drop zone ────────────────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed #2d3148;
+      border-radius: 12px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: #4f63ff;
+      background: rgba(79,99,255,0.05);
+    }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+    .drop-hint { color: #94a3b8; font-size: 0.9rem; }
+    .drop-hint span { color: #4f63ff; font-weight: 600; }
+    .drop-formats { margin-top: 0.5rem; font-size: 0.75rem; color: #475569; }
+    .file-selected { margin-top: 0.75rem; color: #4ade80; font-size: 0.85rem; font-weight: 600; }
+
+    /* ── Language select ──────────────────────────────────────────────────── */
+    .options-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.25rem;
+    }
+    .options-row label { font-size: 0.85rem; color: #94a3b8; }
+    .options-row select {
+      background: #252836;
+      border: 1px solid #2d3148;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    /* ── Submit button ────────────────────────────────────────────────────── */
+    .btn-primary {
+      margin-top: 1.5rem;
+      width: 100%;
+      background: linear-gradient(135deg, #4f63ff, #7c3aed);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.85rem;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn-primary:hover:not(:disabled) { opacity: 0.9; }
+    .btn-primary:active:not(:disabled) { transform: scale(0.98); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Progress ─────────────────────────────────────────────────────────── */
+    #progress-card { display: none; }
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 0.5rem;
+    }
+    .progress-bar-bg {
+      background: #252836;
+      border-radius: 99px;
+      height: 8px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4f63ff, #7c3aed);
+      border-radius: 99px;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+    .progress-status { margin-top: 0.75rem; font-size: 0.85rem; color: #64748b; }
+
+    /* ── Result ───────────────────────────────────────────────────────────── */
+    #result-card { display: none; }
+    .tab-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .tab-btn {
+      background: #252836;
+      border: 1px solid #2d3148;
+      color: #94a3b8;
+      border-radius: 8px;
+      padding: 0.35rem 1rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      background: #4f63ff;
+      border-color: #4f63ff;
+      color: #fff;
+    }
+    textarea.result-box {
+      width: 100%;
+      min-height: 260px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      font-family: "Noto Sans TC", "SF Mono", monospace;
+      line-height: 1.7;
+      padding: 1rem;
+      resize: vertical;
+    }
+    .download-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+    .btn-download {
+      flex: 1;
+      background: #252836;
+      border: 1px solid #2d3148;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 0.6rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-download:hover { background: #2d3148; }
+
+    /* ── Error ────────────────────────────────────────────────────────────── */
+    .error-box {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 10px;
+      padding: 1rem;
+      color: #fca5a5;
+      font-size: 0.875rem;
+      margin-top: 1rem;
+      display: none;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────────────── */
+    footer {
+      margin-top: 3rem;
+      font-size: 0.75rem;
+      color: #334155;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="36" height="36" rx="8" fill="#4f63ff"/>
+      <path d="M10 22 Q14 12 18 18 Q22 24 26 14" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <circle cx="18" cy="26" r="2" fill="white"/>
+    </svg>
+    <div class="logo-text">
+      <h1 id="h1-title">會議轉錄服務</h1>
+      <p id="p-subtitle">Powered by Gemma 4 E4B · ASR</p>
+    </div>
+  </div>
+  <div class="lang-toggle">
+    <button id="btn-zh" class="active" onclick="setLang('zh')">中文</button>
+    <button id="btn-en" onclick="setLang('en')">EN</button>
+  </div>
+</header>
+
+<!-- ── Upload card ─────────────────────────────────────────────────────── -->
+<div class="card" id="upload-card">
+  <div class="section-title" id="label-upload">上傳音檔</div>
+
+  <div class="drop-zone" id="drop-zone">
+    <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac,.webm" />
+    <div class="drop-icon">🎙️</div>
+    <div class="drop-hint" id="drop-hint">
+      <span id="drop-click">點擊選擇</span><span id="drop-or">或拖曳音檔至此</span>
+    </div>
+    <div class="drop-formats">MP3 · WAV · M4A · OGG · FLAC · WebM</div>
+    <div class="file-selected" id="file-name"></div>
+  </div>
+
+  <div class="options-row">
+    <label id="label-lang">轉錄語言：</label>
+    <select id="lang-select">
+      <option value="zh" id="opt-zh">繁體中文</option>
+      <option value="en" id="opt-en">English</option>
+    </select>
+  </div>
+
+  <button class="btn-primary" id="btn-submit" disabled onclick="submitFile()" id="btn-start">
+    <span id="btn-label">開始轉錄</span>
+  </button>
+
+  <div class="error-box" id="error-box"></div>
+</div>
+
+<!-- ── Progress card ───────────────────────────────────────────────────── -->
+<div class="card" id="progress-card">
+  <div class="section-title" id="label-processing">處理中</div>
+  <div class="progress-label">
+    <span id="progress-text">正在分析音檔…</span>
+    <span id="progress-pct">0%</span>
+  </div>
+  <div class="progress-bar-bg">
+    <div class="progress-bar-fill" id="progress-fill"></div>
+  </div>
+  <div class="progress-status" id="progress-detail"></div>
+</div>
+
+<!-- ── Result card ─────────────────────────────────────────────────────── -->
+<div class="card" id="result-card">
+  <div class="section-title" id="label-result">轉錄結果</div>
+  <div class="tab-row">
+    <button class="tab-btn active" id="tab-text" onclick="switchTab('text')">純文字</button>
+    <button class="tab-btn" id="tab-srt" onclick="switchTab('srt')">SRT 字幕</button>
+  </div>
+  <textarea class="result-box" id="result-box" readonly></textarea>
+  <div class="download-row">
+    <button class="btn-download" id="btn-dl-txt" onclick="downloadFile('txt')">⬇ 下載 .txt</button>
+    <button class="btn-download" id="btn-dl-srt" onclick="downloadFile('srt')">⬇ 下載 .srt</button>
+    <button class="btn-download" id="btn-reset" onclick="resetForm()">🔄 重新上傳</button>
+  </div>
+</div>
+
+<footer>
+  Gemma 4 E4B &nbsp;·&nbsp; Max 30s/chunk &nbsp;·&nbsp;
+  <span id="footer-note">長音檔自動切片處理</span>
+</footer>
+
+<script>
+// ── i18n ──────────────────────────────────────────────────────────────────
+const I18N = {
+  zh: {
+    title: "會議轉錄服務",
+    labelUpload: "上傳音檔",
+    dropClick: "點擊選擇",
+    dropOr: "或拖曳音檔至此",
+    labelLang: "轉錄語言：",
+    optZh: "繁體中文",
+    optEn: "English",
+    btnLabel: "開始轉錄",
+    labelProcessing: "處理中",
+    progressInit: "正在分析音檔…",
+    labelResult: "轉錄結果",
+    tabText: "純文字",
+    tabSrt: "SRT 字幕",
+    dlTxt: "⬇ 下載 .txt",
+    dlSrt: "⬇ 下載 .srt",
+    reset: "🔄 重新上傳",
+    footerNote: "長音檔自動切片處理",
+    errNoFile: "請先選擇音檔",
+    errServer: "伺服器錯誤：",
+    chunkStatus: (i, n) => `正在轉錄第 ${i}/${n} 段…`,
+  },
+  en: {
+    title: "Meeting Transcription",
+    labelUpload: "Upload Audio",
+    dropClick: "Click to select",
+    dropOr: " or drag & drop audio here",
+    labelLang: "Transcription language:",
+    optZh: "Traditional Chinese",
+    optEn: "English",
+    btnLabel: "Start Transcription",
+    labelProcessing: "Processing",
+    progressInit: "Analysing audio file…",
+    labelResult: "Transcription Result",
+    tabText: "Plain Text",
+    tabSrt: "SRT Subtitles",
+    dlTxt: "⬇ Download .txt",
+    dlSrt: "⬇ Download .srt",
+    reset: "🔄 Upload Again",
+    footerNote: "Long audio auto-chunked into ≤25 s segments",
+    errNoFile: "Please select an audio file first.",
+    errServer: "Server error: ",
+    chunkStatus: (i, n) => `Transcribing chunk ${i} of ${n}…`,
+  },
+};
+
+let currentLang = "zh";
+let resultData = { text: "", srt: "" };
+let currentTab = "text";
+
+function setLang(lang) {
+  currentLang = lang;
+  document.documentElement.lang = lang === "zh" ? "zh-TW" : "en";
+  const t = I18N[lang];
+  document.getElementById("h1-title").textContent       = t.title;
+  document.getElementById("label-upload").textContent   = t.labelUpload;
+  document.getElementById("drop-click").textContent     = t.dropClick;
+  document.getElementById("drop-or").textContent        = t.dropOr;
+  document.getElementById("label-lang").textContent     = t.labelLang;
+  document.getElementById("opt-zh").textContent         = t.optZh;
+  document.getElementById("opt-en").textContent         = t.optEn;
+  document.getElementById("btn-label").textContent      = t.btnLabel;
+  document.getElementById("label-processing").textContent = t.labelProcessing;
+  document.getElementById("progress-text").textContent  = t.progressInit;
+  document.getElementById("label-result").textContent   = t.labelResult;
+  document.getElementById("tab-text").textContent       = t.tabText;
+  document.getElementById("tab-srt").textContent        = t.tabSrt;
+  document.getElementById("btn-dl-txt").textContent     = t.dlTxt;
+  document.getElementById("btn-dl-srt").textContent     = t.dlSrt;
+  document.getElementById("btn-reset").textContent      = t.reset;
+  document.getElementById("footer-note").textContent    = t.footerNote;
+  document.getElementById("btn-zh").classList.toggle("active", lang === "zh");
+  document.getElementById("btn-en").classList.toggle("active", lang === "en");
+}
+
+// ── File selection ────────────────────────────────────────────────────────
+const fileInput = document.getElementById("file-input");
+const dropZone  = document.getElementById("drop-zone");
+
+fileInput.addEventListener("change", () => {
+  if (fileInput.files[0]) showFile(fileInput.files[0]);
+});
+
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  const f = e.dataTransfer.files[0];
+  if (f) { fileInput.files = e.dataTransfer.files; showFile(f); }
+});
+
+function showFile(file) {
+  document.getElementById("file-name").textContent = `✓ ${file.name}  (${(file.size/1024).toFixed(1)} KB)`;
+  document.getElementById("btn-submit").disabled = false;
+  hideError();
+}
+
+// ── Submit ────────────────────────────────────────────────────────────────
+async function submitFile() {
+  const file = fileInput.files[0];
+  if (!file) { showError(I18N[currentLang].errNoFile); return; }
+
+  const lang     = document.getElementById("lang-select").value;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("language", lang);
+
+  showProgress(0, I18N[currentLang].progressInit);
+  document.getElementById("upload-card").style.opacity = "0.5";
+  document.getElementById("upload-card").style.pointerEvents = "none";
+  document.getElementById("progress-card").style.display = "block";
+  document.getElementById("result-card").style.display = "none";
+  hideError();
+
+  // Fake progress while waiting (actual chunk count unknown ahead of time)
+  let fakeProgress = 5;
+  const fakeTimer = setInterval(() => {
+    fakeProgress = Math.min(fakeProgress + 3, 85);
+    showProgress(fakeProgress, I18N[currentLang].progressInit);
+  }, 800);
+
+  try {
+    const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+    clearInterval(fakeTimer);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+
+    const data = await res.json();
+    resultData = { text: data.text, srt: data.srt };
+
+    showProgress(100, "");
+    setTimeout(() => {
+      document.getElementById("progress-card").style.display = "none";
+      document.getElementById("upload-card").style.opacity = "1";
+      document.getElementById("upload-card").style.pointerEvents = "auto";
+      showResult();
+    }, 600);
+
+  } catch (err) {
+    clearInterval(fakeTimer);
+    document.getElementById("progress-card").style.display = "none";
+    document.getElementById("upload-card").style.opacity = "1";
+    document.getElementById("upload-card").style.pointerEvents = "auto";
+    showError(I18N[currentLang].errServer + err.message);
+  }
+}
+
+// ── Progress helpers ──────────────────────────────────────────────────────
+function showProgress(pct, label) {
+  document.getElementById("progress-fill").style.width = pct + "%";
+  document.getElementById("progress-pct").textContent  = pct + "%";
+  if (label) document.getElementById("progress-text").textContent = label;
+}
+
+// ── Result helpers ────────────────────────────────────────────────────────
+function showResult() {
+  document.getElementById("result-card").style.display = "block";
+  switchTab(currentTab);
+  document.getElementById("result-card").scrollIntoView({ behavior: "smooth" });
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById("result-box").value = resultData[tab] || "";
+  document.getElementById("tab-text").classList.toggle("active", tab === "text");
+  document.getElementById("tab-srt").classList.toggle("active", tab === "srt");
+}
+
+function downloadFile(ext) {
+  const content = resultData[ext === "txt" ? "text" : "srt"] || "";
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `transcription.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function resetForm() {
+  fileInput.value = "";
+  document.getElementById("file-name").textContent = "";
+  document.getElementById("btn-submit").disabled = true;
+  document.getElementById("result-card").style.display = "none";
+  resultData = { text: "", srt: "" };
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ── Error helpers ─────────────────────────────────────────────────────────
+function showError(msg) {
+  const box = document.getElementById("error-box");
+  box.textContent = msg;
+  box.style.display = "block";
+}
+function hideError() {
+  document.getElementById("error-box").style.display = "none";
+}
+</script>
+</body>
+</html>
