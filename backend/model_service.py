@@ -70,7 +70,7 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
             {
                 "role": "user",
                 "content": [
-                    {"type": "audio", "audio": tmp_path},
+                    {"type": "audio", "url": tmp_path},
                     {"type": "text", "text": prompt_text},
                 ],
             }
