@@ -99,7 +99,12 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
 
     response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
     result = processor.parse_response(response)
-    return result.strip()
+    # parse_response 回傳 dict（含 thinking / text 欄位）或純字串
+    if isinstance(result, dict):
+        text = result.get("text") or result.get("content") or str(result)
+    else:
+        text = result
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
