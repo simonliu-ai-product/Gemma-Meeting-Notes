@@ -11,7 +11,6 @@ GET /health
 """
 
 import base64
-import io
 import os
 import logging
 import tempfile
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-E2B-it")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE   = "cuda" if torch.cuda.is_available() else "cpu"
 
 app = Flask(__name__)
 
@@ -39,12 +38,11 @@ logger.info(f"Loading model {MODEL_ID} on {DEVICE} ...")
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 model = AutoModelForMultimodalLM.from_pretrained(
     MODEL_ID,
-    dtype="auto",
     device_map="auto",
+    dtype=torch.bfloat16,
 )
 model.eval()
 logger.info("Model loaded successfully.")
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,20 +56,19 @@ PROMPTS = {
 def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
     prompt_text = PROMPTS.get(language, PROMPTS["zh"])
 
-    # 存成暫存 WAV 檔（processor 需要檔案路徑）
+    # base64 → 暫存 WAV 檔（processor 透過路徑讀取音訊）
     wav_bytes = base64.b64decode(audio_b64)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(wav_bytes)
         tmp_path = tmp.name
 
     try:
-        # 音訊放在文字前面（官方建議順序）
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "audio", "url": tmp_path},
-                    {"type": "text", "text": prompt_text},
+                    {"type": "text",  "text": prompt_text},
                 ],
             }
         ]
@@ -87,16 +84,13 @@ def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
         input_len = inputs["input_ids"].shape[-1]
 
         with torch.inference_mode():
-            output_ids = model.generate(**inputs, max_new_tokens=512)
+            output = model.generate(
+                **inputs,
+                max_new_tokens=512,
+                do_sample=False,
+            )
 
-        response = processor.decode(output_ids[0][input_len:], skip_special_tokens=False)
-        result = processor.parse_response(response)
-
-        if isinstance(result, dict):
-            text = result.get("text") or result.get("content") or str(result)
-        else:
-            text = result
-
+        text = processor.decode(output[0][input_len:], skip_special_tokens=True)
         return text.strip()
 
     finally:
@@ -115,7 +109,7 @@ def health():
 def transcribe():
     data = request.get_json(force=True)
     audio_b64 = data.get("audio_b64", "")
-    language = data.get("language", "zh")
+    language  = data.get("language", "zh")
 
     if not audio_b64:
         return jsonify({"error": "audio_b64 is required"}), 400
