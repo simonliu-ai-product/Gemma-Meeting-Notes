@@ -58,15 +58,17 @@ PROMPTS = {
 }
 
 
-def decode_audio(b64_str: str) -> tuple[torch.Tensor, int]:
-    """Decode base64 WAV → (waveform tensor [1, T], sample_rate)."""
+def decode_audio(b64_str: str) -> tuple:
+    """Decode base64 WAV → (waveform numpy array [T], sample_rate)."""
     wav_bytes = base64.b64decode(b64_str)
     buf = io.BytesIO(wav_bytes)
     waveform, sr = torchaudio.load(buf)
-    # Ensure mono
+    # Ensure mono, then squeeze to 1D numpy array (samples,)
     if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)
-    return waveform, sr
+        waveform = waveform.mean(dim=0)
+    else:
+        waveform = waveform.squeeze(0)
+    return waveform.numpy(), sr
 
 
 def transcribe_chunk(audio_b64: str, language: str = "zh") -> str:
