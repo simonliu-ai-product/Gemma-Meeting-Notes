@@ -430,54 +430,80 @@ async function submitFile() {
   formData.append("file", file);
   formData.append("language", lang);
 
-  showProgress(0, I18N[currentLang].progressInit);
+  showProgress(0, I18N[currentLang].progressInit, "");
   document.getElementById("upload-card").style.opacity = "0.5";
   document.getElementById("upload-card").style.pointerEvents = "none";
   document.getElementById("progress-card").style.display = "block";
   document.getElementById("result-card").style.display = "none";
   hideError();
 
-  // Fake progress while waiting (actual chunk count unknown ahead of time)
-  let fakeProgress = 5;
-  const fakeTimer = setInterval(() => {
-    fakeProgress = Math.min(fakeProgress + 3, 85);
-    showProgress(fakeProgress, I18N[currentLang].progressInit);
-  }, 800);
+  function resetUI() {
+    document.getElementById("upload-card").style.opacity = "1";
+    document.getElementById("upload-card").style.pointerEvents = "auto";
+  }
 
   try {
     const res = await fetch("/api/transcribe", { method: "POST", body: formData });
-    clearInterval(fakeTimer);
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       throw new Error(err.detail || res.statusText);
     }
 
-    const data = await res.json();
-    resultData = { text: data.text, srt: data.srt };
+    // ── 讀取 SSE 串流 ──────────────────────────────────────────────────────
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    showProgress(100, "");
-    setTimeout(() => {
-      document.getElementById("progress-card").style.display = "none";
-      document.getElementById("upload-card").style.opacity = "1";
-      document.getElementById("upload-card").style.pointerEvents = "auto";
-      showResult();
-    }, 600);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // 解析每個 SSE 事件（以 \n\n 分隔）
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop(); // 最後一段可能不完整，留到下一輪
+
+      for (const part of parts) {
+        const line = part.replace(/^data:\s*/, "").trim();
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+
+        if (msg.type === "start") {
+          showProgress(5, I18N[currentLang].chunkStatus(0, msg.total), `共 ${msg.total} 個片段`);
+
+        } else if (msg.type === "chunk") {
+          const pct = Math.round((msg.index / msg.total) * 95);
+          showProgress(pct, I18N[currentLang].chunkStatus(msg.index, msg.total), `片段 ${msg.index}／${msg.total} 完成`);
+
+        } else if (msg.type === "result") {
+          resultData = { text: msg.text, srt: msg.srt };
+          showProgress(100, "", "");
+          setTimeout(() => {
+            document.getElementById("progress-card").style.display = "none";
+            resetUI();
+            showResult();
+          }, 400);
+
+        } else if (msg.type === "error") {
+          throw new Error(msg.detail);
+        }
+      }
+    }
 
   } catch (err) {
-    clearInterval(fakeTimer);
     document.getElementById("progress-card").style.display = "none";
-    document.getElementById("upload-card").style.opacity = "1";
-    document.getElementById("upload-card").style.pointerEvents = "auto";
+    resetUI();
     showError(I18N[currentLang].errServer + err.message);
   }
 }
 
 // ── Progress helpers ──────────────────────────────────────────────────────
-function showProgress(pct, label) {
+function showProgress(pct, label, detail) {
   document.getElementById("progress-fill").style.width = pct + "%";
   document.getElementById("progress-pct").textContent  = pct + "%";
-  if (label) document.getElementById("progress-text").textContent = label;
+  if (label !== undefined) document.getElementById("progress-text").textContent = label;
+  if (detail !== undefined) document.getElementById("progress-detail").textContent = detail;
 }
 
 // ── Result helpers ────────────────────────────────────────────────────────
